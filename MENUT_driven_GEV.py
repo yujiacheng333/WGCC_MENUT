@@ -11,12 +11,14 @@ from scipy.linalg import eigh
 from pyroomacoustics.bss.common import projection_back
 
 if __name__ == '__main__':
-    prefix = "/home/jax/Desktop/实际语音/十八米电视机带噪"
-    recv_signals = np.load(prefix+"/haha.npy")[2 * 45000:18 * 45000]
+    prefix = "/home/jax/Desktop/datas2/DATA4"
+    with open(prefix+"/DATA.TXT", "rb") as f:
+        recv_signals = f.read()
+    recv_signals = tf.io.decode_raw(recv_signals, tf.int32)
+    recv_signals = tf.reshape(recv_signals, [-1, 8]).numpy().T[:-1, 8000*2:-8000*1].astype(np.float)
     recv_signals -= np.mean(recv_signals)
     recv_signals /= np.max(np.abs(recv_signals))
-    recv_signals = recv_signals.T
-    recv_signals = librosa.resample(recv_signals, orig_sr=45000, target_sr=8000)
+    # recv_signals = librosa.resample(recv_signals, orig_sr=45000, target_sr=8000)
     spectral = tf.signal.stft(recv_signals, frame_length=1024, frame_step=256, fft_length=1024).numpy()
     power = np.abs(spectral)
     low_power_mask = power[0] > 1e-2 * np.max(power[0])
@@ -53,11 +55,12 @@ if __name__ == '__main__':
     accumulator = np.zeros([t * f, 2])
     accumulator[low_power_mask] = out
     accumulator = np.reshape(accumulator, [t, f, 2])
-    est_mask = tf.nn.softmax(accumulator*1, axis=-1).numpy()
+    est_mask = tf.one_hot(np.argmax(accumulator, axis=-1), depth=2, dtype=tf.float32).numpy()
     est_mask *= low_power_mask.reshape([t, f, 1])
-
-    ryy_phase = np.einsum("itf, jtf->tfij", spectral, spectral.conj())
-    ryy = ryy_phase
+    normed_spectral = np.exp(1j*np.angle(spectral))
+    ryy = np.einsum("itf, jtf->tfij", normed_spectral, normed_spectral.conj())
+    ryy *= np.abs(spectral)[0, ..., np.newaxis, np.newaxis]
+    # ryy = np.log1p(np.abs(ryy)+1e-9) * np.exp(1j*np.angle(ryy))
     rxx = np.einsum("tfa, tfij->afij", est_mask, ryy)
     ryy = np.sum(ryy, axis=0)
     spk, freq, chs, _ = rxx.shape
